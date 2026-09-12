@@ -1,0 +1,149 @@
+name: Build ECHO CITY
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: echo-city-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.3.13750724
+
+jobs:
+  preflight:
+    name: Host safety gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run preflight
+        run: ./scripts/preflight.sh
+
+  android:
+    name: Android ${{ matrix.abi }}
+    needs: preflight
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - armeabi-v7a
+          - arm64-v8a
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned AML + SAUtils
+        run: ./scripts/fetch_deps.sh
+
+      - name: Install pinned Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "ndk;${NDK_VERSION}"
+
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build selected ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          "$ANDROID_NDK_HOME/ndk-build" \
+            -j2 \
+            APP_ABI="${{ matrix.abi }}"
+
+          test -s "libs/${{ matrix.abi }}/libECHO_CITY.so"
+
+          file "libs/${{ matrix.abi }}/libECHO_CITY.so"
+          readelf -h "libs/${{ matrix.abi }}/libECHO_CITY.so"
+
+          sha256sum \
+            "libs/${{ matrix.abi }}/libECHO_CITY.so" \
+            > "libs/${{ matrix.abi }}/libECHO_CITY.so.sha256"
+
+      - name: Upload ABI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: echo-city-${{ matrix.abi }}
+          path: |
+            libs/${{ matrix.abi }}/libECHO_CITY.so
+            libs/${{ matrix.abi }}/libECHO_CITY.so.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Assemble install package
+    needs: android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download both ABI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: echo-city-*
+          path: _artifacts
+
+      - name: Normalize artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p libs/armeabi-v7a
+          mkdir -p libs/arm64-v8a
+
+          cp \
+            _artifacts/echo-city-armeabi-v7a/libECHO_CITY.so \
+            libs/armeabi-v7a/
+
+          cp \
+            _artifacts/echo-city-arm64-v8a/libECHO_CITY.so \
+            libs/arm64-v8a/
+
+          test -s libs/armeabi-v7a/libECHO_CITY.so
+          test -s libs/arm64-v8a/libECHO_CITY.so
+
+      - name: Package and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./scripts/package.sh
+
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          ZIP="release/NOXXA_ECHO_CITY_${VERSION}_READY.zip"
+
+          unzip -t "$ZIP"
+          sha256sum -c "${ZIP}.sha256"
+
+      - name: Upload ready-to-install package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOXXA-ECHO-CITY-${{ github.sha }}
+          path: |
+            release/*_READY.zip
+            release/*_READY.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
