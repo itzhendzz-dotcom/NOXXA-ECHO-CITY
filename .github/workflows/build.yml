@@ -15,15 +15,32 @@ concurrency:
 
 env:
   NDK_VERSION: 27.3.13750724
+  SOURCE_ARCHIVE: NOXXA_ECHO_CITY_v1.0.0_PEAK_SOURCE.zip
+  SOURCE_FOLDER: NOXXA_ECHO_CITY_v1.0.0_PEAK_SOURCE
 
 jobs:
   preflight:
     name: Host safety gates
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$SOURCE_ARCHIVE"
+          rm -rf _echo_src
+          mkdir -p _echo_src
+          unzip -q "$SOURCE_ARCHIVE" -d _echo_src
+          test -f "_echo_src/$SOURCE_FOLDER/main.cpp"
+          cp -a "_echo_src/$SOURCE_FOLDER/." .
+          chmod +x scripts/*.sh
+          test -x scripts/preflight.sh
+          test -f Android.mk
+          test -f Application.mk
+          echo "ECHO CITY source prepared successfully"
 
       - name: Run preflight
         run: ./scripts/preflight.sh
@@ -32,17 +49,29 @@ jobs:
     name: Android ${{ matrix.abi }}
     needs: preflight
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
-        abi:
-          - armeabi-v7a
-          - arm64-v8a
-
+        abi: [armeabi-v7a, arm64-v8a]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$SOURCE_ARCHIVE"
+          rm -rf _echo_src
+          mkdir -p _echo_src
+          unzip -q "$SOURCE_ARCHIVE" -d _echo_src
+          test -f "_echo_src/$SOURCE_FOLDER/main.cpp"
+          cp -a "_echo_src/$SOURCE_FOLDER/." .
+          chmod +x scripts/*.sh
+          test -x scripts/fetch_deps.sh
+          test -f Android.mk
+          test -f Application.mk
+          echo "ECHO CITY source prepared successfully"
 
       - name: Fetch pinned AML + SAUtils
         run: ./scripts/fetch_deps.sh
@@ -51,35 +80,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-
           if [[ ! -x "$SDKMANAGER" ]]; then
             SDKMANAGER="$(command -v sdkmanager)"
           fi
-
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "ndk;${NDK_VERSION}"
-
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Build selected ABI
         shell: bash
         run: |
           set -euo pipefail
-
-          "$ANDROID_NDK_HOME/ndk-build" \
-            -j2 \
-            APP_ABI="${{ matrix.abi }}"
-
+          "$ANDROID_NDK_HOME/ndk-build" -j2 APP_ABI="${{ matrix.abi }}"
           test -s "libs/${{ matrix.abi }}/libECHO_CITY.so"
-
           file "libs/${{ matrix.abi }}/libECHO_CITY.so"
           readelf -h "libs/${{ matrix.abi }}/libECHO_CITY.so"
-
-          sha256sum \
-            "libs/${{ matrix.abi }}/libECHO_CITY.so" \
-            > "libs/${{ matrix.abi }}/libECHO_CITY.so.sha256"
+          sha256sum "libs/${{ matrix.abi }}/libECHO_CITY.so" > "libs/${{ matrix.abi }}/libECHO_CITY.so.sha256"
 
       - name: Upload ABI binary
         uses: actions/upload-artifact@v4
@@ -95,10 +112,22 @@ jobs:
     name: Assemble install package
     needs: android
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$SOURCE_ARCHIVE"
+          rm -rf _echo_src
+          mkdir -p _echo_src
+          unzip -q "$SOURCE_ARCHIVE" -d _echo_src
+          test -f "_echo_src/$SOURCE_FOLDER/scripts/package.sh"
+          cp -a "_echo_src/$SOURCE_FOLDER/." .
+          chmod +x scripts/*.sh
+          echo "ECHO CITY source prepared successfully"
 
       - name: Download both ABI artifacts
         uses: actions/download-artifact@v4
@@ -110,18 +139,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p libs/armeabi-v7a
-          mkdir -p libs/arm64-v8a
-
-          cp \
-            _artifacts/echo-city-armeabi-v7a/libECHO_CITY.so \
-            libs/armeabi-v7a/
-
-          cp \
-            _artifacts/echo-city-arm64-v8a/libECHO_CITY.so \
-            libs/arm64-v8a/
-
+          mkdir -p libs/armeabi-v7a libs/arm64-v8a
+          cp _artifacts/echo-city-armeabi-v7a/libECHO_CITY.so libs/armeabi-v7a/
+          cp _artifacts/echo-city-arm64-v8a/libECHO_CITY.so libs/arm64-v8a/
           test -s libs/armeabi-v7a/libECHO_CITY.so
           test -s libs/arm64-v8a/libECHO_CITY.so
 
@@ -129,12 +149,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           ./scripts/package.sh
-
           VERSION="$(tr -d '\r\n' < VERSION)"
           ZIP="release/NOXXA_ECHO_CITY_${VERSION}_READY.zip"
-
           unzip -t "$ZIP"
           sha256sum -c "${ZIP}.sha256"
 
