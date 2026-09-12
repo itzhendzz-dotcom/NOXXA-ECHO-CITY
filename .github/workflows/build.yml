@@ -92,7 +92,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$ANDROID_NDK_HOME/ndk-build" -j2 APP_ABI="${{ matrix.abi }}"
+          "$ANDROID_NDK_HOME/ndk-build" \
+            NDK_PROJECT_PATH="$PWD" \
+            APP_BUILD_SCRIPT="$PWD/Android.mk" \
+            NDK_APPLICATION_MK="$PWD/Application.mk" \
+            APP_ABI="${{ matrix.abi }}" \
+            -j2
+
           test -s "libs/${{ matrix.abi }}/libECHO_CITY.so"
           file "libs/${{ matrix.abi }}/libECHO_CITY.so"
           readelf -h "libs/${{ matrix.abi }}/libECHO_CITY.so"
